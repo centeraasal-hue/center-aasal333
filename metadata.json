@@ -1,0 +1,8 @@
+{
+  "name": "Al-Assal With You – سنتر العسال للمفروشات",
+  "description": "المنصة الإلكترونية الرسمية لسنتر العسال لتجارة المفروشات بالإسكندرية - عروض يومية، بطاطين، لحف، ملايات وفوط، كارت العسال والمكافآت ومساعد ذكي.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
