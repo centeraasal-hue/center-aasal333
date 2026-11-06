@@ -23,6 +23,7 @@ export function verifyAdminToken(token: string): AdminPayload | null {
 }
 
 export function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
   let token: string | undefined;
 
   // 1. Check Authorization Bearer header
@@ -47,13 +48,17 @@ export function requireAdminAuth(req: Request, res: Response, next: NextFunction
     return;
   }
 
-  // Check if admin user still exists in database
-  const user = db.prepare('SELECT id, username, display_name FROM admin_users WHERE id = ?').get(payload.id);
-  if (!user) {
-    res.status(401).json({ error: 'المستخدم الإداري غير موجود' });
-    return;
+  try {
+    // Check if admin user still exists in database
+    const user = db.prepare('SELECT id, username, display_name FROM admin_users WHERE id = ?').get(payload.id);
+    if (!user) {
+      res.status(401).json({ error: 'المستخدم الإداري غير موجود' });
+      return;
+    }
+    (req as any).admin = user;
+    next();
+  } catch (err: any) {
+    console.error('requireAdminAuth DB error:', err);
+    res.status(500).json({ error: 'خطأ في التحقق من صلاحيات المدير' });
   }
-
-  (req as any).admin = user;
-  next();
 }

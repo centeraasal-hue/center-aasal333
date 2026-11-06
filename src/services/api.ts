@@ -20,11 +20,55 @@ export function getStoredAdminToken(): string | null {
 function getAuthHeaders(): HeadersInit {
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
   };
   if (adminToken) {
     headers['Authorization'] = `Bearer ${adminToken}`;
   }
   return headers;
+}
+
+/**
+ * Safely parse response body as JSON.
+ * Protects against unexpected HTML or plain text (e.g. Express error pages starting with 'T' or Vite fallback)
+ * preventing "Unexpected token 'T'" SyntaxErrors.
+ */
+async function parseJsonResponse<T = any>(res: Response, fallbackError: string = 'حدث خطأ في الخادم'): Promise<T> {
+  const contentType = res.headers.get('content-type') || '';
+  let data: any = null;
+
+  try {
+    if (contentType.includes('application/json')) {
+      data = await res.json();
+    } else {
+      const text = await res.text();
+      try {
+        data = JSON.parse(text);
+      } catch {
+        // Plain text or HTML received
+        console.warn('Received non-JSON response from server (status: ' + res.status + '):', text.slice(0, 80));
+        data = null;
+      }
+    }
+  } catch (parseErr) {
+    console.error('Error parsing response:', parseErr);
+    data = null;
+  }
+
+  if (!res.ok) {
+    let errorMsg = data?.error || data?.message;
+    if (!errorMsg) {
+      if (res.status === 400) errorMsg = 'بيانات غير صحيحة أو غير مكتملة';
+      else if (res.status === 401) errorMsg = 'اسم المستخدم أو كلمة المرور غير صحيحة';
+      else if (res.status === 403) errorMsg = 'غير مصرح لك بالدخول إلى هذه الصفحة';
+      else if (res.status === 404) errorMsg = 'الخدمة المطلوبة غير متوفرة';
+      else if (res.status === 500) errorMsg = 'حدث خطأ داخلي في الخادم. يرجى المحاولة لاحقاً';
+      else errorMsg = fallbackError;
+    }
+    throw new Error(errorMsg);
+  }
+
+  return data as T;
 }
 
 // ==========================================
@@ -37,9 +81,8 @@ export async function fetchHomeData(): Promise<{
   featuredProducts: Product[];
   bestSellers: Product[];
 }> {
-  const res = await fetch('/api/home');
-  if (!res.ok) throw new Error('فشل جلب بيانات الصفحة الرئيسية');
-  return res.json();
+  const res = await fetch('/api/home', { headers: { 'Accept': 'application/json' } });
+  return parseJsonResponse(res, 'فشل جلب بيانات الصفحة الرئيسية');
 }
 
 export async function fetchProducts(params?: {
@@ -58,21 +101,18 @@ export async function fetchProducts(params?: {
   if (params?.inStockOnly) query.append('inStockOnly', 'true');
   if (params?.sort) query.append('sort', params.sort);
 
-  const res = await fetch(`/api/products?${query.toString()}`);
-  if (!res.ok) throw new Error('فشل جلب المنتجات');
-  return res.json();
+  const res = await fetch(`/api/products?${query.toString()}`, { headers: { 'Accept': 'application/json' } });
+  return parseJsonResponse(res, 'فشل جلب المنتجات');
 }
 
 export async function fetchProductById(id: number): Promise<Product> {
-  const res = await fetch(`/api/products/${id}`);
-  if (!res.ok) throw new Error('المنتج غير موجود');
-  return res.json();
+  const res = await fetch(`/api/products/${id}`, { headers: { 'Accept': 'application/json' } });
+  return parseJsonResponse(res, 'المنتج غير موجود');
 }
 
 export async function fetchOffers(): Promise<Offer[]> {
-  const res = await fetch('/api/offers');
-  if (!res.ok) throw new Error('فشل جلب العروض');
-  return res.json();
+  const res = await fetch('/api/offers', { headers: { 'Accept': 'application/json' } });
+  return parseJsonResponse(res, 'فشل جلب العروض');
 }
 
 export async function validateCoupon(code: string, subtotal: number): Promise<{
@@ -85,12 +125,10 @@ export async function validateCoupon(code: string, subtotal: number): Promise<{
 }> {
   const res = await fetch('/api/offers/validate-coupon', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify({ code, subtotal }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'كود غير صالح');
-  return data;
+  return parseJsonResponse(res, 'كود الخصم غير صالح');
 }
 
 export async function submitOrder(orderData: {
@@ -112,19 +150,17 @@ export async function submitOrder(orderData: {
 }> {
   const res = await fetch('/api/orders', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify(orderData),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل إرسال الطلب');
-  return data;
+  return parseJsonResponse(res, 'فشل إرسال الطلب');
 }
 
 export async function trackOrder(query: string): Promise<Order[]> {
-  const res = await fetch(`/api/orders/track/${encodeURIComponent(query)}`);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'لم يتم العثور على طلبات');
-  return data;
+  const res = await fetch(`/api/orders/track/${encodeURIComponent(query)}`, {
+    headers: { 'Accept': 'application/json' },
+  });
+  return parseJsonResponse(res, 'لم يتم العثور على طلبات');
 }
 
 export async function lookupCustomer(phone: string): Promise<{
@@ -136,12 +172,10 @@ export async function lookupCustomer(phone: string): Promise<{
 }> {
   const res = await fetch('/api/customers/lookup', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify({ phone }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'العضوية غير موجودة');
-  return data;
+  return parseJsonResponse(res, 'العضوية غير موجودة');
 }
 
 export async function registerCustomer(data: {
@@ -155,18 +189,15 @@ export async function registerCustomer(data: {
 }> {
   const res = await fetch('/api/customers/register', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify(data),
   });
-  const resp = await res.json();
-  if (!res.ok) throw new Error(resp.error || 'فشل التسجيل');
-  return resp;
+  return parseJsonResponse(res, 'فشل التسجيل');
 }
 
 export async function fetchRewards(): Promise<Reward[]> {
-  const res = await fetch('/api/rewards');
-  if (!res.ok) throw new Error('فشل جلب قائمة المكافآت');
-  return res.json();
+  const res = await fetch('/api/rewards', { headers: { 'Accept': 'application/json' } });
+  return parseJsonResponse(res, 'فشل جلب قائمة المكافآت');
 }
 
 export async function redeemReward(customerPhone: string, rewardId: number): Promise<{
@@ -176,22 +207,19 @@ export async function redeemReward(customerPhone: string, rewardId: number): Pro
 }> {
   const res = await fetch('/api/rewards/redeem', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify({ customerPhone, rewardId }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل استبدال المكافأة');
-  return data;
+  return parseJsonResponse(res, 'فشل استبدال المكافأة');
 }
 
 export async function sendAiMessage(message: string): Promise<string> {
   const res = await fetch('/api/ai/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify({ message }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل الاتصال بالمساعد الذكي');
+  const data = await parseJsonResponse<{ reply: string }>(res, 'فشل الاتصال بالمساعد الذكي');
   return data.reply;
 }
 
@@ -206,27 +234,30 @@ export async function adminLogin(credentials: { username: string; password: stri
 }> {
   const res = await fetch('/api/admin/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify(credentials),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل تسجيل الدخول');
+  const data = await parseJsonResponse<{ success: boolean; token: string; admin: AdminUser }>(res, 'فشل تسجيل الدخول');
   setStoredAdminToken(data.token);
   return data;
 }
 
 export async function adminLogout(): Promise<void> {
-  await fetch('/api/admin/logout', { method: 'POST' });
-  setStoredAdminToken(null);
+  try {
+    const res = await fetch('/api/admin/logout', { method: 'POST', headers: getAuthHeaders() });
+    await parseJsonResponse(res, 'فشل تسجيل الخروج');
+  } catch (err) {
+    console.warn('Logout warning:', err);
+  } finally {
+    setStoredAdminToken(null);
+  }
 }
 
 export async function fetchAdminMe(): Promise<{ admin: AdminUser }> {
   const res = await fetch('/api/admin/me', {
     headers: getAuthHeaders(),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'جلسة غير صالحة');
-  return data;
+  return parseJsonResponse(res, 'جلسة غير صالحة');
 }
 
 export async function changeAdminPassword(currentPassword: string, newPassword: string): Promise<void> {
@@ -235,24 +266,21 @@ export async function changeAdminPassword(currentPassword: string, newPassword: 
     headers: getAuthHeaders(),
     body: JSON.stringify({ currentPassword, newPassword }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل تغيير كلمة المرور');
+  await parseJsonResponse(res, 'فشل تغيير كلمة المرور');
 }
 
 export async function fetchAdminStats(): Promise<AdminStats> {
   const res = await fetch('/api/admin/stats', {
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل جلب الإحصائيات');
-  return res.json();
+  return parseJsonResponse(res, 'فشل جلب الإحصائيات');
 }
 
 export async function fetchAdminProducts(): Promise<Product[]> {
   const res = await fetch('/api/admin/products', {
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل جلب المنتجات للإدارة');
-  return res.json();
+  return parseJsonResponse(res, 'فشل جلب المنتجات للإدارة');
 }
 
 export async function saveAdminProduct(productData: Partial<Product>, isEdit?: boolean, id?: number): Promise<Product> {
@@ -264,8 +292,7 @@ export async function saveAdminProduct(productData: Partial<Product>, isEdit?: b
     headers: getAuthHeaders(),
     body: JSON.stringify(productData),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل حفظ المنتج');
+  const data = await parseJsonResponse<{ product: Product }>(res, 'فشل حفظ المنتج');
   return data.product;
 }
 
@@ -274,15 +301,14 @@ export async function deleteAdminProduct(id: number): Promise<void> {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل حذف المنتج');
+  await parseJsonResponse(res, 'فشل حذف المنتج');
 }
 
 export async function fetchAdminOrders(): Promise<Order[]> {
   const res = await fetch('/api/admin/orders', {
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل جلب الطلبات');
-  return res.json();
+  return parseJsonResponse(res, 'فشل جلب الطلبات');
 }
 
 export async function updateAdminOrderStatus(orderId: number, status: string): Promise<Order> {
@@ -291,8 +317,7 @@ export async function updateAdminOrderStatus(orderId: number, status: string): P
     headers: getAuthHeaders(),
     body: JSON.stringify({ status }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل تحديث حالة الطلب');
+  const data = await parseJsonResponse<{ order: Order }>(res, 'فشل تحديث حالة الطلب');
   return data.order;
 }
 
@@ -301,15 +326,14 @@ export async function deleteAdminOrder(orderId: number): Promise<void> {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل حذف الطلب');
+  await parseJsonResponse(res, 'فشل حذف الطلب');
 }
 
 export async function fetchAdminOffers(): Promise<Offer[]> {
   const res = await fetch('/api/admin/offers', {
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل جلب العروض');
-  return res.json();
+  return parseJsonResponse(res, 'فشل جلب العروض');
 }
 
 export async function saveAdminOffer(offerData: Partial<Offer>, isEdit?: boolean, id?: number): Promise<Offer> {
@@ -321,8 +345,7 @@ export async function saveAdminOffer(offerData: Partial<Offer>, isEdit?: boolean
     headers: getAuthHeaders(),
     body: JSON.stringify(offerData),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل حفظ العرض');
+  const data = await parseJsonResponse<{ offer: Offer }>(res, 'فشل حفظ العرض');
   return data.offer;
 }
 
@@ -331,15 +354,14 @@ export async function deleteAdminOffer(id: number): Promise<void> {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل حذف العرض');
+  await parseJsonResponse(res, 'فشل حذف العرض');
 }
 
 export async function fetchAdminCustomers(): Promise<Customer[]> {
   const res = await fetch('/api/admin/customers', {
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل جلب العملاء');
-  return res.json();
+  return parseJsonResponse(res, 'فشل جلب العملاء');
 }
 
 export async function adjustCustomerPoints(customerId: number, pointsChange: number, reason: string): Promise<Customer> {
@@ -348,8 +370,7 @@ export async function adjustCustomerPoints(customerId: number, pointsChange: num
     headers: getAuthHeaders(),
     body: JSON.stringify({ pointsChange, reason }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل تعديل النقاط');
+  const data = await parseJsonResponse<{ customer: Customer }>(res, 'فشل تعديل النقاط');
   return data.customer;
 }
 
@@ -357,8 +378,7 @@ export async function fetchAdminSettings(): Promise<SiteSettings> {
   const res = await fetch('/api/admin/settings', {
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error('فشل جلب الإعدادات');
-  return res.json();
+  return parseJsonResponse(res, 'فشل جلب الإعدادات');
 }
 
 export async function saveAdminSettings(settings: Partial<SiteSettings>): Promise<void> {
@@ -367,8 +387,7 @@ export async function saveAdminSettings(settings: Partial<SiteSettings>): Promis
     headers: getAuthHeaders(),
     body: JSON.stringify(settings),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'فشل حفظ الإعدادات');
+  await parseJsonResponse(res, 'فشل حفظ الإعدادات');
 }
 
 export async function downloadExcelExport(type: 'orders' | 'products' | 'customers'): Promise<void> {

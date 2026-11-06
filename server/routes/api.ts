@@ -580,29 +580,52 @@ ${offersContext}
 // 2. ADMIN AUTHENTICATION
 // ==========================================
 
-// POST /api/admin/login
-router.post('/admin/login', (req: Request, res: Response) => {
+// POST /api/admin/login and /api/login
+router.post(['/admin/login', '/login'], (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
   try {
-    const { username, password } = req.body;
+    const body = req.body || {};
+    const username = typeof body.username === 'string' ? body.username.trim() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+
     if (!username || !password) {
       res.status(400).json({ error: 'يرجى إدخال اسم المستخدم وكلمة المرور' });
       return;
     }
 
-    const admin = db.prepare('SELECT * FROM admin_users WHERE username = ?').get(username.trim()) as any;
+    let admin: any;
+    try {
+      admin = db.prepare('SELECT id, username, password_hash, display_name FROM admin_users WHERE username = ?').get(username);
+    } catch (dbErr: any) {
+      console.error('Database query error in admin login:', dbErr);
+      res.status(500).json({ error: 'خطأ في الاتصال بقاعدة البيانات أثناء التحقق من الحساب' });
+      return;
+    }
+
     if (!admin) {
-      res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
+      res.status(401).json({ error: 'بيانات الدخول غير صحيحة: اسم المستخدم غير مسجل' });
       return;
     }
 
-    const isMatch = bcrypt.compareSync(password, admin.password_hash);
+    let isMatch = false;
+    try {
+      isMatch = bcrypt.compareSync(password, admin.password_hash);
+    } catch (bcryptErr: any) {
+      console.error('Bcrypt compare error:', bcryptErr);
+      isMatch = false;
+    }
+
     if (!isMatch) {
-      res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
+      res.status(401).json({ error: 'بيانات الدخول غير صحيحة: كلمة المرور غير صحيحة' });
       return;
     }
 
-    // Update last login
-    db.prepare('UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(admin.id);
+    // Update last login timestamp safely
+    try {
+      db.prepare('UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(admin.id);
+    } catch (updateErr) {
+      console.error('Failed to update last_login timestamp:', updateErr);
+    }
 
     const token = generateAdminToken({
       id: admin.id,
@@ -611,14 +634,18 @@ router.post('/admin/login', (req: Request, res: Response) => {
     });
 
     // Set secure cookie
-    res.cookie('assal_admin_jwt', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-    });
+    try {
+      res.cookie('assal_admin_jwt', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      });
+    } catch (cookieErr) {
+      console.error('Failed to set cookie:', cookieErr);
+    }
 
-    res.json({
+    res.status(200).json({
       success: true,
       token,
       admin: {
@@ -628,27 +655,37 @@ router.post('/admin/login', (req: Request, res: Response) => {
       }
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('Unexpected admin login error:', error);
+    res.status(500).json({ error: 'حدث خطأ في الخادم أثناء تسجيل الدخول: ' + (error?.message || 'يرجى المحاولة لاحقاً') });
   }
 });
 
-// POST /api/admin/logout
-router.post('/admin/logout', (req: Request, res: Response) => {
-  res.clearCookie('assal_admin_jwt');
+// POST /api/admin/logout and /api/logout
+router.post(['/admin/logout', '/logout'], (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  try {
+    res.clearCookie('assal_admin_jwt');
+  } catch (err) {
+    console.error('Clear cookie error:', err);
+  }
   res.json({ success: true, message: 'تم تسجيل الخروج بنجاح' });
 });
 
-// GET /api/admin/me
-router.get('/admin/me', requireAdminAuth, (req: Request, res: Response) => {
+// GET /api/admin/me and /api/me
+router.get(['/admin/me', '/me'], requireAdminAuth, (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.json({
     admin: (req as any).admin
   });
 });
 
-// POST /api/admin/change-password
-router.post('/admin/change-password', requireAdminAuth, (req: Request, res: Response) => {
+// POST /api/admin/change-password and /api/change-password
+router.post(['/admin/change-password', '/change-password'], requireAdminAuth, (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
   try {
-    const { currentPassword, newPassword } = req.body;
+    const body = req.body || {};
+    const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+    const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
     const adminUser = (req as any).admin;
 
     if (!currentPassword || !newPassword || newPassword.length < 6) {
@@ -657,7 +694,19 @@ router.post('/admin/change-password', requireAdminAuth, (req: Request, res: Resp
     }
 
     const currentRecord = db.prepare('SELECT password_hash FROM admin_users WHERE id = ?').get(adminUser.id) as any;
-    if (!bcrypt.compareSync(currentPassword, currentRecord.password_hash)) {
+    if (!currentRecord) {
+      res.status(404).json({ error: 'المستخدم غير موجود' });
+      return;
+    }
+
+    let isCurrentMatch = false;
+    try {
+      isCurrentMatch = bcrypt.compareSync(currentPassword, currentRecord.password_hash);
+    } catch {
+      isCurrentMatch = false;
+    }
+
+    if (!isCurrentMatch) {
       res.status(400).json({ error: 'كلمة المرور الحالية غير صحيحة' });
       return;
     }
@@ -668,9 +717,11 @@ router.post('/admin/change-password', requireAdminAuth, (req: Request, res: Resp
 
     res.json({ success: true, message: 'تم تغيير كلمة المرور بنجاح' });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'فشل تغيير كلمة المرور: ' + error?.message });
   }
 });
+
 
 // ==========================================
 // 3. ADMIN DASHBOARD OPERATIONS (PROTECTED)
